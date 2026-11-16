@@ -6,19 +6,13 @@ const {
 } = require('discord.js');
 const {
   PaymentApiError,
-  VoucherAlreadyUsedError,
   redeemVoucher,
 } = require('../Modules/TopupModule');
+const { respondPrivately } = require('../Modules/PrivateResponseModule');
 
 const MODAL_PREFIX = 'topup:angpao:';
 
 function getErrorMessage(error) {
-  if (error instanceof VoucherAlreadyUsedError) {
-    if (error.rejectedBySameWallet) {
-      return 'This Angpao was created from the same TrueMoney Wallet as the store, so TrueMoney rejected it and no Point was added. Please use a new voucher created from a different wallet. Check the voucher status in TrueMoney before trying again.';
-    }
-    return 'This voucher has already been submitted. Do not send it again; contact support if your wallet was charged.';
-  }
   if (error.name === 'PaymentConfigurationError') {
     return 'Top-up is not configured. Please contact an administrator.';
   }
@@ -50,24 +44,36 @@ async function submitVoucher(interaction) {
   await interaction.deferReply({ ephemeral: true });
   const voucher = interaction.fields.getTextInputValue('voucher_url').trim();
 
+  console.info('Top-up redemption started.');
+  let result;
   try {
-    const result = await redeemVoucher(interaction.user.id, voucher);
-    if (!result.success) {
-      await interaction.editReply(result.message);
-      return;
-    }
-
-    await interaction.editReply(
-      `Top-up confirmed: **${result.amount.toLocaleString('en-US')} THB** added to your Point.\nTransaction reference: \`${result.id}\`\nNew balance: **${result.balance.toLocaleString('en-US')} Point**`,
-    );
+    result = await redeemVoucher(interaction.user.id, voucher);
   } catch (error) {
+    const name = typeof error?.name === 'string' ? error.name : 'Error';
+    const status = Number.isInteger(error?.status) ? ` (HTTP ${error.status})` : '';
+    const code = typeof error?.code === 'string' ? ` [${error.code}]` : '';
+    const detail = typeof error?.message === 'string' ? `: ${error.message}` : '';
+    console.error(`Top-up redemption failed: ${name}${status}${code}${detail}`);
+
     const message = getErrorMessage(error);
     if (message) {
-      await interaction.editReply(message);
+      await respondPrivately(interaction, message);
       return;
     }
     throw error;
   }
+
+  if (!result.success) {
+    console.info('Top-up voucher was not accepted by the payment provider.');
+    await respondPrivately(interaction, result.message);
+    return;
+  }
+
+  console.info('Top-up redemption confirmed.');
+  await respondPrivately(
+    interaction,
+    `Top-up confirmed: **${result.amount.toLocaleString('en-US')} THB** added to your Point.\nTransaction reference: \`${result.id}\`\nNew balance: **${result.balance.toLocaleString('en-US')} Point**`,
+  );
 }
 
 module.exports = {
@@ -89,9 +95,8 @@ module.exports = {
 
   async handleModalSubmit(interaction) {
     if (interaction.customId !== `${MODAL_PREFIX}${interaction.user.id}`) {
-      await interaction.reply({
+      await respondPrivately(interaction, {
         content: 'This top-up form does not belong to your account.',
-        ephemeral: true,
       });
       return;
     }

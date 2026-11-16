@@ -1,9 +1,46 @@
-const { createHash, randomUUID } = require('node:crypto');
+const { randomUUID } = require('node:crypto');
 const { getConfig } = require('./Config');
 const database = require('./DatabaseModule');
 
 const REDEEM_URL = 'https://paywithme.xnoxstudio.in.th/api/angpao/redeem';
 const REQUEST_TIMEOUT_MS = 12000;
+const MAX_LOGGED_RESPONSE_LENGTH = 5000;
+const SENSITIVE_FIELD = /authorization|secret|token|voucher|password|phone|mobile|wallet|email/i;
+
+function sanitizeApiResponse(value, field = '') {
+  if (SENSITIVE_FIELD.test(field)) return '[REDACTED]';
+  if (Array.isArray(value)) return value.map((entry) => sanitizeApiResponse(entry));
+  if (value && typeof value === 'object') {
+    return Object.fromEntries(
+      Object.entries(value).map(([key, entry]) => [key, sanitizeApiResponse(entry, key)]),
+    );
+  }
+  if (typeof value === 'string') {
+    return value
+      .replace(
+        /https?:\/\/gift\.truemoney\.com\/campaign\/\?v=[^&\s]+/gi,
+        'https://gift.truemoney.com/campaign/?v=[REDACTED]',
+      )
+      .slice(0, 1000);
+  }
+  return value;
+}
+
+function logApiResponse(response, payload) {
+  const serialized = JSON.stringify(
+    {
+      status: response.status,
+      ok: response.ok,
+      body: sanitizeApiResponse(payload),
+    },
+    null,
+    2,
+  );
+  const output = serialized.length > MAX_LOGGED_RESPONSE_LENGTH
+    ? `${serialized.slice(0, MAX_LOGGED_RESPONSE_LENGTH)}\n... [truncated]`
+    : serialized;
+  console.info(`Xnox PayWithMe API response:\n${output}`);
+}
 
 class PaymentApiError extends Error {
   constructor(status, code) {
@@ -11,17 +48,6 @@ class PaymentApiError extends Error {
     this.name = 'PaymentApiError';
     this.status = status;
     this.code = code;
-  }
-}
-
-class VoucherAlreadyUsedError extends Error {
-  constructor(payment, userId) {
-    super('This voucher has already been submitted and cannot be retried.');
-    this.name = 'VoucherAlreadyUsedError';
-    this.rejectedBySameWallet =
-      payment.userId === userId &&
-      payment.status === 'failed' &&
-      payment.failureCode === 'CANNOT_GET_OWN_VOUCHER';
   }
 }
 
@@ -41,11 +67,6 @@ function validateVoucher(voucher) {
     throw new Error('Use a valid https://gift.truemoney.com/campaign/?v=... link.');
   }
   return url.toString();
-}
-
-function voucherFingerprint(voucher) {
-  const token = new URL(voucher).searchParams.get('v');
-  return createHash('sha256').update(token).digest('hex');
 }
 
 async function callRedeemApi(voucher) {
@@ -75,8 +96,12 @@ async function callRedeemApi(voucher) {
     try {
       payload = await response.json();
     } catch {
+      console.error(
+        `Xnox PayWithMe API returned a non-JSON or empty response (HTTP ${response.status}).`,
+      );
       throw new PaymentApiError(response.status);
     }
+    logApiResponse(response, payload);
 
     if (!response.ok) {
       throw new PaymentApiError(
@@ -106,37 +131,19 @@ async function callRedeemApi(voucher) {
   }
 }
 
-async function setPaymentStatus(paymentId, status, extra = {}) {
-  await database.transaction((db) => {
-    const payment = db.processedPayments.find((entry) => entry.id === paymentId);
-    if (!payment) throw new Error('Top-up transaction record is missing.');
-    if (payment.status !== 'processing') return;
-    Object.assign(payment, extra, { status, updatedAt: new Date().toISOString() });
-  });
-}
-
-async function creditConfirmedPayment(paymentId, userId, amount, message) {
+function creditConfirmedPayment(paymentId, userId, amount) {
   if (!Number.isSafeInteger(amount) || amount <= 0) {
-    await setPaymentStatus(paymentId, 'review', {
-      providerMessage: 'API confirmed redemption but returned an invalid amount.',
-    });
     throw new Error(
       'The voucher was accepted, but its amount could not be safely credited. Contact support and do not submit it again.',
     );
   }
 
-  const result = await database.transaction((db) => {
-    const payment = db.processedPayments.find((entry) => entry.id === paymentId);
-    if (!payment) throw new Error('Top-up transaction record is missing.');
-    if (payment.status !== 'processing') {
-      throw new Error('This top-up transaction has already been processed.');
-    }
-
+  return database.transaction((db) => {
     const user = database.ensureUser(db, userId);
     if (!Number.isSafeInteger(user.balance + amount)) {
-      payment.status = 'review';
-      payment.updatedAt = new Date().toISOString();
-      return { error: 'The confirmed amount exceeds the account balance limit.' };
+      throw new Error(
+        'The voucher was accepted, but its amount could not be safely credited. Contact support.',
+      );
     }
 
     const timestamp = new Date().toISOString();
@@ -150,18 +157,8 @@ async function creditConfirmedPayment(paymentId, userId, amount, message) {
       createdAt: timestamp,
       provider: 'TrueMoney Angpao',
     });
-    payment.status = 'completed';
-    payment.amount = amount;
-    payment.providerMessage = typeof message === 'string' ? message : null;
-    payment.updatedAt = timestamp;
     return { id: paymentId, amount, balance: user.balance };
   });
-  if (result.error) {
-    throw new Error(
-      'The voucher was accepted, but its amount could not be safely credited. Contact support.',
-    );
-  }
-  return result;
 }
 
 async function redeemVoucher(userId, submittedVoucher) {
@@ -172,43 +169,11 @@ async function redeemVoucher(userId, submittedVoucher) {
     error.name = 'PaymentConfigurationError';
     throw error;
   }
-  const fingerprint = voucherFingerprint(voucher);
   const paymentId = randomUUID();
 
-  await database.transaction((db) => {
-    const previousPayment = db.processedPayments.find(
-      (payment) => payment.voucherFingerprint === fingerprint,
-    );
-    if (previousPayment) {
-      throw new VoucherAlreadyUsedError(previousPayment, userId);
-    }
-    database.ensureUser(db, userId);
-    db.processedPayments.push({
-      id: paymentId,
-      userId,
-      voucherFingerprint: fingerprint,
-      amount: null,
-      currency: 'THB',
-      status: 'processing',
-      createdAt: new Date().toISOString(),
-    });
-  });
-
-  let result;
-  try {
-    result = await callRedeemApi(voucher);
-  } catch (error) {
-    await setPaymentStatus(paymentId, 'uncertain', {
-      failureCode: error.code || error.name,
-    });
-    throw error;
-  }
+  const result = await callRedeemApi(voucher);
 
   if (result.success !== true) {
-    await setPaymentStatus(paymentId, 'failed', {
-      failureCode: typeof result.code === 'string' ? result.code : 'UNKNOWN',
-      providerMessage: typeof result.message === 'string' ? result.message : null,
-    });
     return {
       success: false,
       message: typeof result.message === 'string'
@@ -217,18 +182,12 @@ async function redeemVoucher(userId, submittedVoucher) {
     };
   }
 
-  const credited = await creditConfirmedPayment(
-    paymentId,
-    userId,
-    result.amount,
-    result.message,
-  );
+  const credited = await creditConfirmedPayment(paymentId, userId, result.amount);
   return { success: true, ...credited };
 }
 
 module.exports = {
   PaymentApiError,
-  VoucherAlreadyUsedError,
   redeemVoucher,
   validateVoucher,
 };

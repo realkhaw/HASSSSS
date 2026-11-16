@@ -1,6 +1,7 @@
 const { EmbedBuilder } = require('discord.js');
 const database = require('../Modules/DatabaseModule');
 const { isExpired } = require('../Modules/JunkieModule');
+const { respondPrivately } = require('../Modules/PrivateResponseModule');
 
 function getPurchasedLicenseFields(transactions = []) {
   const purchases = transactions
@@ -43,6 +44,7 @@ function getPurchasedLicenseFields(transactions = []) {
 
 module.exports = {
   async execute(interaction) {
+    await interaction.deferReply({ ephemeral: true });
     const db = await database.readDatabase();
     const user = database.getUser(db, interaction.user.id);
     const balance = user?.balance ?? 0;
@@ -58,6 +60,6 @@ module.exports = {
         ...getPurchasedLicenseFields(user?.transactions),
       );
 
-    await interaction.reply({ embeds: [embed], ephemeral: true });
+    await respondPrivately(interaction, { embeds: [embed] });
   },
 };

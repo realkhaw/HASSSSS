@@ -6,7 +6,7 @@
   "main": "Client.js",
   "scripts": {
     "start": "node Client.js",
-    "check": "node --check Client.js && node --check Commands/Overview.js && node --check Commands/Panel.js && node --check Commands/Purchase.js && node --check Commands/Topup.js && node --check Modules/Config.js && node --check Modules/DatabaseModule.js && node --check Modules/JunkieModule.js && node --check Modules/PurchaseModule.js && node --check Modules/TopupModule.js"
+    "check": "node --check Client.js && node --check Commands/Overview.js && node --check Commands/Panel.js && node --check Commands/Purchase.js && node --check Commands/Topup.js && node --check Modules/Config.js && node --check Modules/DatabaseModule.js && node --check Modules/JunkieModule.js && node --check Modules/PurchaseModule.js && node --check Modules/TopupModule.js && node --check Modules/PrivateResponseModule.js"
   },
   "dependencies": {
     "discord.js": "^14.19.3"

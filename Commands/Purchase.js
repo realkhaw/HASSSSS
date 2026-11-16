@@ -1,5 +1,6 @@
 const { EmbedBuilder } = require('discord.js');
 const { purchaseKey, InsufficientBalanceError } = require('../Modules/PurchaseModule');
+const { respondPrivately } = require('../Modules/PrivateResponseModule');
 
 function getErrorMessage(error) {
   if (error instanceof InsufficientBalanceError) {
@@ -9,10 +10,10 @@ function getErrorMessage(error) {
     return error.message;
   }
   if (error.name === 'JunkieApiError' && error.status === 401) {
-    return 'Junkie API rejected its configured credentials. Please contact an administrator.';
+    return 'Junkie API rejected its configured credentials. Your Point has been refunded; please contact an administrator.';
   }
   if (error.name === 'JunkieApiError' && error.status === 403) {
-    return 'The Junkie API key does not have permission to create keys. Please contact an administrator.';
+    return 'The Junkie API key does not have permission to create keys. Your Point has been refunded; please contact an administrator.';
   }
   if (error.name === 'JunkieApiError' && error.status >= 400 && error.status < 500) {
     return `Junkie could not create the key (HTTP ${error.status}). Your Point has been refunded.`;
@@ -24,10 +25,10 @@ function getErrorMessage(error) {
     error.message === 'JUNKIE_PROVIDER_ID must be a valid numeric ID.' ||
     error.message === 'JUNKIE_PROVIDER_ID must be configured before keys can be purchased.'
   ) {
-    return 'Key purchasing is not configured correctly. Please contact an administrator.';
+    return 'Key purchasing is not configured correctly. Your Point has been refunded; please contact an administrator.';
   }
   if (error.message.startsWith('Configured Junkie provider')) {
-    return 'The configured Junkie provider could not be found. Please contact an administrator.';
+    return 'The configured Junkie provider could not be found. Your Point has been refunded; please contact an administrator.';
   }
   return null;
 }
@@ -47,11 +48,11 @@ module.exports = {
           value: result.balance.toLocaleString('en-US'),
           inline: true,
         });
-      await interaction.editReply({ embeds: [embed] });
+      await respondPrivately(interaction, { embeds: [embed] });
     } catch (error) {
       const message = getErrorMessage(error);
       if (!message) throw error;
-      await interaction.editReply(message);
+      await respondPrivately(interaction, message);
     }
   },
 };

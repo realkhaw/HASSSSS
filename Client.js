@@ -10,6 +10,7 @@ const panel = require('./Commands/Panel');
 const overview = require('./Commands/Overview');
 const topup = require('./Commands/Topup');
 const purchase = require('./Commands/Purchase');
+const { respondPrivately } = require('./Modules/PrivateResponseModule');
 
 function logError(context, error) {
   const name = typeof error?.name === 'string' ? error.name : 'Error';
@@ -73,16 +74,9 @@ async function start() {
       } catch (error) {
         logError('Panel interaction failed', error);
         try {
-          if (interaction.deferred || interaction.replied) {
-            await interaction.editReply({
-              content: 'This action could not be completed. Please try again later.',
-            });
-          } else {
-            await interaction.reply({
-              content: 'This action could not be completed. Please try again later.',
-              ephemeral: true,
-            });
-          }
+          await respondPrivately(interaction, {
+            content: 'This action could not be completed. Please try again later.',
+          });
         } catch {
           console.error('Unable to deliver the panel interaction error response.');
         }

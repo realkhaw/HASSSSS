@@ -6,7 +6,7 @@ const databasePath = path.resolve(process.env.DATABASE_PATH || path.join(__dirna
 let transactionQueue = Promise.resolve();
 
 function createEmptyDatabase() {
-  return { users: {}, processedPayments: [] };
+  return { users: {} };
 }
 
 function isRecord(value) {
@@ -16,10 +16,8 @@ function isRecord(value) {
 function validateDatabase(database) {
   if (!isRecord(database)) throw new Error('Database root must be an object.');
   if (database.users === undefined) database.users = {};
-  if (database.processedPayments === undefined) database.processedPayments = [];
-  if (!isRecord(database.users) || !Array.isArray(database.processedPayments)) {
-    throw new Error('Database has an invalid users or processedPayments field.');
-  }
+  delete database.processedPayments;
+  if (!isRecord(database.users)) throw new Error('Database has an invalid users field.');
 
   for (const [userId, user] of Object.entries(database.users)) {
     if (!/^\d{17,20}$/.test(userId) || !isRecord(user)) {
